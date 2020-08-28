@@ -1,0 +1,20 @@
+kubernetes architecture
+k8s setup
+k8s-images
+k8s-jobs
+k8s-labels and selectors
+k8s-namespace
+k8s-nodes
+k8s-services
+k8s-pods
+k8s-replication controller
+k8s-replicasets
+k8s-deployment
+k8s-volumes
+k8s-secrets
+k8s-network policy
+k8s-api
+k8s-kubectl
+K8s - Autoscaling
+K8s - Dashboard Setup
+K8s - Monitoring

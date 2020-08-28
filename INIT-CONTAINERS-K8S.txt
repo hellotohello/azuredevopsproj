@@ -1,0 +1,589 @@
+
+https://medium.com/@Alibaba_Cloud/kubernetes-init-containers-ac9b95605029
+This tutorial lets you use 5 different Pods to learn how Init Containers work. Init Containers are containers that run before the main container runs with your containerized application. They normally contain setup scripts that prepares an environment for you containerized application. Init Containers also ensure the wider server environment is ready for your application to start to run.
+You can find a detailed list of what these containers can be used for in the official Kubernetes documentation.
+Basic Demo: Init Containers That Just Sleeps (Too Slow)
+All the demos in this tutorial have Init Containers that simply just sleeps or exits.
+The reason is that this tutorial aims to teach you the syntax and use of Init Containers.
+Once you understand this you are welcome to make your Init Containers run all the complex initializations your production applications need.
+Let’s create a Pod with 2 Init Containers that just echos and sleeps .
+We will then investigate the Pod output to learn what got done and why.
+nano myInitPod-1.yaml
+   
+apiVersion: v1
+kind: Pod
+metadata:
+  name: myapp-pod
+  labels:
+    app: myapp
+spec:
+  containers:
+  - name: myapp-container
+    image: busybox
+    command: ['sh', '-c', 'echo The app is running! && sleep 3600']
+  initContainers:
+  - name: my-init-container-1
+    image: busybox
+    command: ['sh', '-c', 'echo my-init-container-1 start; sleep 2;echo my-init-container-1 complete;']
+  - name: my-init-container-2
+    image: busybox
+    command: ['sh', '-c', 'echo my-init-container-2 start; sleep 2;echo my-init-container-2 complete;']
+Create the Pod.
+kubectl create -f myInitPod-1.yaml 
+   
+pod/myapp-pod created
+Let’s investigate the creation of this Pod over the next 30 seconds.
+Here is the output of kubectl get po I ran every 3 seconds — for 30 seconds.
+kubectl get po  
+NAME        READY   STATUS     RESTARTS   AGE
+myapp-pod   0/1     Init:0/2   0          3s
+   
+NAME        READY   STATUS     RESTARTS   AGE
+myapp-pod   0/1     Init:0/2   0          6s
+   
+NAME        READY   STATUS     RESTARTS   AGE
+myapp-pod   0/1     Init:0/2   0          9s
+   
+NAME        READY   STATUS     RESTARTS   AGE
+myapp-pod   0/1     Init:0/2   0          13s
+Later on:
+kubectl get po  
+NAME        READY   STATUS     RESTARTS   AGE
+myapp-pod   0/1     Init:1/2   0          22s
+   
+NAME        READY   STATUS            RESTARTS   AGE
+myapp-pod   0/1     PodInitializing   0          24s
+   
+NAME        READY   STATUS            RESTARTS   AGE
+myapp-pod   0/1     PodInitializing   0          29s
+   
+NAME        READY   STATUS            RESTARTS   AGE
+myapp-pod   0/1     PodInitializing   0          30s
+   
+NAME        READY   STATUS    RESTARTS   AGE
+myapp-pod   1/1     Running   0          33s
+The status field describes best what happened:
+Init:0/2 … Pod initializes
+Init:1/2 … Init Container 1 running
+Init:2/2 … Init Container 2 running ( I missed catching that ouput line )
+PodInitializing … main Pod initializing
+Running … main Pod is running
+This process took 33 seconds, but it is not the fault of Init Containers. ( We will fix that in section 2 )
+Init Containers must all complete successfully before the main Pod may run.
+All my-init-container-1 had to do was:
+command: [‘sh’, ‘-c’, ‘echo my-init-container-1 start; sleep 2;echo my-init-container-1 complete;’]
+It did so successfully. We will see the logs in a second.
+All my-init-container-2 had to do was:
+command: [‘sh’, ‘-c’, ‘echo my-init-container-2 start; sleep 2;echo my-init-container-2 complete;’]
+It did so successfully. We will see the logs in a second.
+All myapp-container-1 had to do was:
+command: [‘sh’, ‘-c’, ‘echo The app is running! && sleep 3600’]
+It did so successfully. We will see the logs right now
+kubectl logs pod/myapp-pod -c my-init-container-1 --timestamps=true
+2019-01-05T05:59:11.009868369Z my-init-container-1 start
+2019-01-05T05:59:13.013553431Z my-init-container-1 complete
+kubectl logs pod/myapp-pod -c my-init-container-2 --timestamps=true
+2019-01-05T05:59:18.41524046Z my-init-container-2 start
+2019-01-05T05:59:20.417166592Z my-init-container-2 complete
+kubectl logs pod/myapp-pod  --timestamps=true
+2019-01-05T05:59:29.795805962Z The app is running!
+Note the 2 Init Containers slept for 2 seconds between their start and complete message.
+The last output of pod/myapp-pod shows The app is running!
+In this very simple demo our 2 Init Containers slept for 2 seconds each ( pretending that to be setup work that will enable our main Pod to run successfully. )
+That is the totality of Init Containers : they must run successfully before main Pod runs. They run in sequence … 1 and 2. It’s as simple as that.
+Another way to investigate the state of our Pod is to use kubectl describe pod/myapp-pod .
+The rest of this tutorial only contains the important state and exit code fields — to understand it more easily.
+kubectl describe pod/myapp-pod 
+Status:             Running
+  my-init-container-1:
+      echo my-init-container-1 start; sleep 2;echo my-init-container-1 complete;
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Sat, 05 Jan 2019 07:59:11 +0200
+      Finished:     Sat, 05 Jan 2019 07:59:13 +0200
+    Ready:          True
+  my-init-container-2:
+      echo my-init-container-2 start; sleep 2;echo my-init-container-2 complete;
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Sat, 05 Jan 2019 07:59:18 +0200
+      Finished:     Sat, 05 Jan 2019 07:59:20 +0200
+    Ready:          True
+  myapp-container:
+    State:          Running
+      Started:      Sat, 05 Jan 2019 07:59:29 +0200
+    Ready:          True
+Conditions:
+  Type              Status
+  Initialized       True
+  Ready             True
+  ContainersReady   True
+  PodScheduled      True
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  82s   default-scheduler  Successfully assigned default/myapp-pod to minikube
+  Normal  Pulling    81s   kubelet, minikube  pulling image "busybox"
+  Normal  Pulled     70s   kubelet, minikube  Successfully pulled image "busybox"
+  Normal  Created    70s   kubelet, minikube  Created container
+  Normal  Started    69s   kubelet, minikube  Started container
+  Normal  Pulling    67s   kubelet, minikube  pulling image "busybox"
+  Normal  Pulled     62s   kubelet, minikube  Successfully pulled image "busybox"
+  Normal  Created    62s   kubelet, minikube  Created container
+  Normal  Started    62s   kubelet, minikube  Started container
+  Normal  Pulling    60s   kubelet, minikube  pulling image "busybox"
+  Normal  Pulled     51s   kubelet, minikube  Successfully pulled image "busybox"
+  Normal  Created    51s   kubelet, minikube  Created container
+  Normal  Started    51s   kubelet, minikube  Started container
+It is much easier to read the output of this command.
+Right at the top
+my-init-container-1:
+      echo my-init-container-1 start; sleep 2;echo my-init-container-1 complete;
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+Init Container 1 Terminated because it Completed successfully with exit code 0.
+Init Container 2 exact same thing:
+Init Container 2 Terminated because it Completed successfully with exit code 0.
+myapp-container:
+    State:          Running
+      Started:      Sat, 05 Jan 2019 07:59:29 +0200
+    Ready:          True
+myapp-container is Running and ready:
+myapp-container:
+    State:          Running
+      Started:      Sat, 05 Jan 2019 07:59:29 +0200
+    Ready:          True
+Conditions:
+  Type              Status
+  Initialized       True
+  Ready             True
+  ContainersReady   True
+  PodScheduled      True
+Its command was:
+command: [‘sh’, ‘-c’, ‘echo The app is running! && sleep 3600’]
+It is now successfully sleeping 3600 seconds.
+Why This Demo Took 30 Seconds?
+The reason this demo took 30 seconds is since each container had to go pull busybox from the Internet.
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  82s   default-scheduler  Successfully assigned default/myapp-pod to minikube
+  Normal  Pulling    81s   kubelet, minikube  pulling image "busybox"
+  Normal  Pulled     70s   kubelet, minikube  Successfully pulled image "busybox"
+  Normal  Created    70s   kubelet, minikube  Created container
+  Normal  Started    69s   kubelet, minikube  Started container
+  Normal  Pulling    67s   kubelet, minikube  pulling image "busybox"
+  Normal  Pulled     62s   kubelet, minikube  Successfully pulled image "busybox"
+  Normal  Created    62s   kubelet, minikube  Created container
+  Normal  Started    62s   kubelet, minikube  Started container
+  Normal  Pulling    60s   kubelet, minikube  pulling image "busybox"
+  Normal  Pulled     51s   kubelet, minikube  Successfully pulled image "busybox"
+  Normal  Created    51s   kubelet, minikube  Created container
+  Normal  Started    51s   kubelet, minikube  Started container
+We fix that in section 2 of this tutorial.
+Basic Demo: Init Containers That Just Sleeps
+Delete our previous Pod:
+kubectl delete pod/myapp-pod 
+   
+pod "myapp-pod" deleted
+Continue reading below while that is running.
+We specify imagePullPolicy: IfNotPresent in the Pod spec below.
+That causes the Pod to ONLY go pull our busybox image from the Internet if it is not present on the local server.
+Busybox is tiny and your Internet speed may be awesome, this still makes massive time difference.
+The second problem this section fix is that that it deletes a Pod immediately.
+We do that by specifying terminationGracePeriodSeconds: 0 as you can see in spec below.
+Create the YAML file for our Pod 2 using the text below:
+nano myInitPod-2.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: myapp-pod
+  labels:
+    app: myapp
+spec:
+  containers:
+  - name: myapp-container
+    image: busybox
+    imagePullPolicy: IfNotPresent
+    command: ['sh', '-c', 'echo The app is running! && sleep 3600']
+  terminationGracePeriodSeconds: 0
+  initContainers:
+  - name: my-init-container-1
+    image: busybox
+    imagePullPolicy: IfNotPresent
+    command: ['sh', '-c', 'echo my-init-container-1 start; sleep 2;echo my-init-container-1 complete;']
+  - name: my-init-container-2
+    image: busybox
+    imagePullPolicy: IfNotPresent
+    command: ['sh', '-c', 'echo my-init-container-2 start; sleep 2;echo my-init-container-2 complete;']
+Create the Pod.
+kubectl create -f myInitPod-2.yaml 
+   
+pod/myapp-pod created
+Investigate to determine if this Pod got running faster:
+kubectl describe pod/myapp-pod 
+   
+Name:               myapp-pod
+Namespace:          default
+Priority:           0
+PriorityClassName:  <none>
+Node:               minikube/10.0.2.15
+Start Time:         Sat, 05 Jan 2019 08:33:03 +0200
+Labels:             app=myapp
+Annotations:        <none>
+Status:             Running
+IP:                 172.17.0.5
+Init Containers:
+  my-init-container-1:
+    Container ID:  docker://5175ac45ec3f9664d511db083f1b15e817cc4c9ac28be31f6ae356583cf1efcb
+    Image:         busybox
+    Image ID:      docker-pullable://busybox@sha256:7964ad52e396a6e045c39b5a44438424ac52e12e4d5a25d94895f2058cb863a0
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      sh
+      -c
+      echo my-init-container-1 start; sleep 2;echo my-init-container-1 complete;
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Sat, 05 Jan 2019 08:33:04 +0200
+      Finished:     Sat, 05 Jan 2019 08:33:06 +0200
+    Ready:          True
+    Restart Count:  0
+    Environment:    <none>
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from default-token-gs2wt (ro)
+  my-init-container-2:
+    Container ID:  docker://0b20b8bbc582663fdd8c5050e96268497095406b024f9c5c84e518e6818b8e16
+    Image:         busybox
+    Image ID:      docker-pullable://busybox@sha256:7964ad52e396a6e045c39b5a44438424ac52e12e4d5a25d94895f2058cb863a0
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      sh
+      -c
+      echo my-init-container-2 start; sleep 2;echo my-init-container-2 complete;
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Sat, 05 Jan 2019 08:33:07 +0200
+      Finished:     Sat, 05 Jan 2019 08:33:09 +0200
+    Ready:          True
+    Restart Count:  0
+    Environment:    <none>
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from default-token-gs2wt (ro)
+Containers:
+  myapp-container:
+    Container ID:  docker://ad93ff9d3033f694a93b1656768f6ac58e62278cc608c3b5d33ac793fc3779cb
+    Image:         busybox
+    Image ID:      docker-pullable://busybox@sha256:7964ad52e396a6e045c39b5a44438424ac52e12e4d5a25d94895f2058cb863a0
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      sh
+      -c
+      echo The app is running! && sleep 3600
+    State:          Running
+      Started:      Sat, 05 Jan 2019 08:33:10 +0200
+    Ready:          True
+    Restart Count:  0
+    Environment:    <none>
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from default-token-gs2wt (ro)
+Conditions:
+  Type              Status
+  Initialized       True 
+  Ready             True 
+  ContainersReady   True 
+  PodScheduled      True 
+Volumes:
+  default-token-gs2wt:
+    Type:        Secret (a volume populated by a Secret)
+    SecretName:  default-token-gs2wt
+    Optional:    false
+QoS Class:       BestEffort
+Node-Selectors:  <none>
+Tolerations:     node.kubernetes.io/not-ready:NoExecute for 300s
+                 node.kubernetes.io/unreachable:NoExecute for 300s
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  42s   default-scheduler  Successfully assigned default/myapp-pod to minikube
+  Normal  Pulled     42s   kubelet, minikube  Container image "busybox" already present on machine
+  Normal  Created    41s   kubelet, minikube  Created container
+  Normal  Started    41s   kubelet, minikube  Started container
+  Normal  Pulled     38s   kubelet, minikube  Container image "busybox" already present on machine
+  Normal  Created    38s   kubelet, minikube  Created container
+  Normal  Started    38s   kubelet, minikube  Started container
+  Normal  Pulled     35s   kubelet, minikube  Container image "busybox" already present on machine
+  Normal  Created    35s   kubelet, minikube  Created container
+  Normal  Started    35s   kubelet, minikube  Started container
+Look only at last 10 lines of this output. 7 seconds to get main container started versus 33 seconds before.
+Note we have 2 Init Containers sleeping 2 seconds each = 4 seconds. So the overall time for just our main container is 3 seconds.
+All 3 containers use busybox. Note the message:
+Container image “busybox” already present on machine
+26 seconds saved getting busybox 3 times on a fast Internet connection.
+Unfortunately you cannot use imagePullPolicy: IfNotPresent in your prod environment. In prod you probably should pull your latest image from your private repository every time a Pod is started ( to get the latest version ) .
+If we now delete our Pod …
+kubectl delete -f myInitPod-2.yaml
+   
+pod "myapp-pod" force deleted
+and use
+kubectl get po 
+   
+No resources found.
+the Pod will be gone: immediately .
+terminationGracePeriodSeconds: 0 allows us to quickly test Pods in development .
+USING THIS IN PROD WILL CAUSE DATA CORRUPTION.
+Determine a proper terminationGracePeriodSeconds for your prod use cases.
+Basic Demo: Init Containers That Crash Forever
+Init Containers must complete successfully before the main container can run.
+Now we demo Init Container number 1 crashing : exit code = 1 … and observe the effects.
+Note name: my-init-container-1 command … exit 1
+command: ['sh', '-c', 'echo my-init-container-1 start; exit 1 ;echo my-init-container-1 complete;']
+nano myInitPod-3.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: myapp-pod
+  labels:
+    app: myapp
+spec:
+  containers:
+  - name: myapp-container
+    image: busybox
+    imagePullPolicy: IfNotPresent
+    command: ['sh', '-c', 'echo The app is running! && sleep 3600']
+  terminationGracePeriodSeconds: 0
+  initContainers:
+  - name: my-init-container-1
+    image: busybox
+    imagePullPolicy: IfNotPresent
+    command: ['sh', '-c', 'echo my-init-container-1 start; exit 1 ;echo my-init-container-1 complete;']
+  - name: my-init-container-2
+    image: busybox
+    imagePullPolicy: IfNotPresent
+    command: ['sh', '-c', 'echo my-init-container-2 start; sleep 2;echo my-init-container-2 complete;']
+Create the Pod.
+kubectl create -f myInitPod-3.yaml
+pod/myapp-pod created
+Get detail on currently running Pods:
+kubectl get po
+NAME        READY   STATUS                  RESTARTS   AGE
+myapp-pod   0/1     Init:CrashLoopBackOff   1          5s
+CrashLoopBackOff — this means that container 1 starts, exit 1 crashes, the Kubernetes tries again with same results. Its in a crash loop.
+Investigate this further
+kubectl describe pod/myapp-pod 
+Events:
+  Type     Reason     Age               From               Message
+  Normal   Scheduled  21s               default-scheduler  Successfully assigned default/myapp-pod to minikube
+  Normal   Pulled     3s (x3 over 20s)  kubelet, minikube  Container image "busybox" already present on machine
+  Normal   Created    3s (x3 over 20s)  kubelet, minikube  Created container
+  Normal   Started    3s (x3 over 20s)  kubelet, minikube  Started container
+Look at last 5 lines. Container got started and created 3 times in 20 seconds. It is in a crash loop
+Running kubectl get po again.
+kubectl get po
+NAME        READY   STATUS                  RESTARTS   AGE
+myapp-pod   0/1     Init:CrashLoopBackOff   3          89s
+Restarted 3 times in 89 seconds.
+Our Pod is broken. Init Container 2 did not even try running, since Init Container 1 has crashed.
+Our main Pod did not even get close to try to run — process stopped at Init Container 1 that crashes repeatedly.
+Delete our problem Pod:
+kubectl delete -f myInitPod-3.yaml --force --grace-period=0 
+   
+pod "myapp-pod" force deleted
+Ensure it is gone:
+kubectl get po 
+No resources found.
+We just proved this is true: Init Containers must complete successfully before the main container can run.
+They MUST succeed in creating environment for main container otherwise the main container cannot start.
+The default restartPolicy is Always. Pod will continue trying to start forever.
+We fix this in next section.
+Basic Demo: Init Containers That Crash Just Once
+It may be that in your prod environment you want your Pod to terminate immediately when its Init Containers crash.
+You do that by specifying restartPolicy: Never in your Pod spec.
+Let’s create a Pod with such a spec and see what happens when it encounters an exit code 1 error in its Init Container number one.
+Note restartPolicy: Never below:
+nano myInitPod-4.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: myapp-pod
+  labels:
+    app: myapp
+spec:
+  containers:
+  - name: myapp-container
+    image: busybox
+    imagePullPolicy: IfNotPresent
+    command: ['sh', '-c', 'echo The app is running! && sleep 3600']
+  terminationGracePeriodSeconds: 0
+  restartPolicy: Never
+  
+  initContainers:
+  - name: my-init-container-1
+    image: busybox
+    imagePullPolicy: IfNotPresent
+    command: ['sh', '-c', 'echo my-init-container-1 start; exit 1 ;echo my-init-container-1 complete;']
+  - name: my-init-container-2
+    image: busybox
+    imagePullPolicy: IfNotPresent
+    command: ['sh', '-c', 'echo my-init-container-2 start; sleep 2;echo my-init-container-2 complete;']
+kubectl create -f myInitPod-4.yaml 
+   
+pod/myapp-pod created
+Investigate Pod status:
+kubectl get po
+NAME        READY   STATUS       RESTARTS   AGE
+myapp-pod   0/1     Init:Error   0          3s
+30 seconds later
+NAME        READY   STATUS       RESTARTS   AGE
+myapp-pod   0/1     Init:Error   0          28s
+restartPolicy: Never prevents Pod from repeatedly restarting.
+kubectl describe pod/myapp-pod 
+Status:             Failed
+  my-init-container-1:
+      echo my-init-container-1 start; exit 1 ;echo my-init-container-1 complete;
+    State:          Terminated
+      Reason:       Error
+      Exit Code:    1
+      Started:      Sat, 05 Jan 2019 09:08:06 +0200
+      Finished:     Sat, 05 Jan 2019 09:08:06 +0200
+    Ready:          False
+  my-init-container-2:
+      echo my-init-container-2 start; sleep 2;echo my-init-container-2 complete;
+    State:          Waiting
+      Reason:       PodInitializing
+    Ready:          False
+  myapp-container:
+    State:          Waiting
+      Reason:       PodInitializing
+    Ready:          False
+Conditions:
+  Type              Status
+  Initialized       False
+  Ready             False
+  ContainersReady   False
+  PodScheduled      True
+Events:
+  Type    Reason     Age   From               Message
+  Normal  Scheduled  16s   default-scheduler  Successfully assigned default/myapp-pod to minikube
+  Normal  Pulled     16s   kubelet, minikube  Container image "busybox" already present on machine
+  Normal  Created    16s   kubelet, minikube  Created container
+  Normal  Started    15s   kubelet, minikube  Started container
+At the top we see Init Container 1 terminated with exit code 1.
+my-init-container-1:
+      echo my-init-container-1 start; exit 1 ;echo my-init-container-1 complete;
+    State:          Terminated
+      Reason:       Error
+      Exit Code:    1
+Init Container 2 state is Waiting for Init Container 1 to finish.
+Main container myapp-container is also waiting.
+restartPolicy: Never terminates a Pod when it encounters an error.
+We can now delete our broken Pod:
+kubectl delete -f myInitPod-4.yaml --force --grace-period=0
+pod "myapp-pod" force deleted
+Check its gone:
+kubectl get po
+No resources found.
+Realistic Production Init Container Simulation
+In production, your Init Containers may take longer than a second to finish.
+This last section of the tutorial creates 4 Init Containers that each run for 3 seconds.
+The main container then sleeps for 10 seconds and exits.
+Let’s see what you should normally observe in a live prod environment where all your Init Containers and containers are running successfully.
+Note there are no exit 1 ( errors ) in this Pod spec below: just sleep 3 or sleep 10.
+I removed terminationGracePeriodSeconds: 0 This simulates a live Pod: it must take the default 30 seconds to terminate gracefully.
+nano myInitPod-7.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: myapp-pod
+  labels:
+    app: myapp
+spec:
+  containers:
+  - name: myapp-container
+    image: busybox
+    imagePullPolicy: IfNotPresent
+    command: ['sh', '-c', 'echo The app is running! && sleep 10']
+  
+  restartPolicy: Never
+  
+  initContainers:
+  - name: my-init-container-1
+    image: busybox
+    imagePullPolicy: IfNotPresent
+    command: ['sh', '-c', 'echo my-init-container-1 start; sleep 3 ;echo my-init-container-1 complete;']
+  - name: my-init-container-2
+    image: busybox
+    imagePullPolicy: IfNotPresent
+    command: ['sh', '-c', 'echo my-init-container-2 start; sleep 3;echo my-init-container-2 complete;']  
+  - name: my-init-container-3
+    image: busybox
+    imagePullPolicy: IfNotPresent
+    command: ['sh', '-c', 'echo my-init-container-3 start; sleep 3;echo my-init-container-3 complete;']  
+  - name: my-init-container-4
+    image: busybox
+    imagePullPolicy: IfNotPresent
+    command: ['sh', '-c', 'echo my-init-container-4 start; sleep 3;echo my-init-container-4 complete;']
+Create the Pod.
+kubectl create -f myInitPod-7.yaml 
+   
+pod/myapp-pod created
+Here is the output of kubectl get po I ran every 3 seconds — for 30 seconds.
+kubectl get po 
+   
+NAME        READY   STATUS     RESTARTS   AGE
+myapp-pod   0/1     Init:0/4   0          3s
+   
+NAME        READY   STATUS     RESTARTS   AGE
+myapp-pod   0/1     Init:1/4   0          6s
+   
+NAME        READY   STATUS     RESTARTS   AGE
+myapp-pod   0/1     Init:2/4   0          9s
+     
+NAME        READY   STATUS     RESTARTS   AGE
+myapp-pod   0/1     Init:2/4   0          11s
+   
+NAME        READY   STATUS     RESTARTS   AGE
+myapp-pod   0/1     Init:3/4   0          15s
+NAME        READY   STATUS    RESTARTS   AGE
+myapp-pod   1/1     Running   0          19s
+   
+NAME        READY   STATUS    RESTARTS   AGE
+myapp-pod   1/1     Running   0          22s
+NAME        READY   STATUS    RESTARTS   AGE
+myapp-pod   1/1     Running   0          26s   
+   
+NAME        READY   STATUS      RESTARTS   AGE
+myapp-pod   0/1     Completed   0          30s
+Several noteworthy things here:
+restarts stay 0 … no errors and no restarts
+there are 4 Init Containers
+while Init Container 1 to 4 are busy the READY status is zero
+only after all 4 Init Containers finish do STATUS change to Running 1/1
+Running 1/1 this means that one running container out of all ONE existing containers in the Pod.
+Init Containers cease after they complete — at the end we have only ONE container running.
+Last line STATUS : Completed. Our Pod ran its sleep for 10 seconds ( from age 19 to 30 sec ) then completes successfully.
+We can now delete our final Pod:
+kubectl delete -f myInitPod-7.yaml
+pod "myapp-pod" deleted
+Check its gone:
+kubectl get po
+No resources found.
+Interesting. Pod got deleted immediately. It did not linger in the terminating state for 30 seconds, probably because its STATUS was completed already. It had no final cleanup to do.
+This was the state of our Pod before deletion:
+myapp-container:
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Sat, 05 Jan 2019 10:37:06 +0200
+      Finished:     Sat, 05 Jan 2019 10:37:16 +0200
+    Ready:          False
+Its State: Terminated because of Reason: Completed with Exit Code: 0
+It could be deleted immediately since there was nothing running and hence nothing to catch and process a shutdown signal
